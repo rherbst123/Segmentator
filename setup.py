@@ -1,12 +1,13 @@
 import os
 import requests
 from tqdm import tqdm
+from art import *
 
 def download_huge_checkpoint():
     url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
     os.makedirs("models", exist_ok=True)
     filename = os.path.basename(url)
-    local_path = os.path.join("models", filename)
+    local_path = os.path.join(os.path.dirname(__file__), "Segmentator/models", filename)
 
     print(f"Downloading {url} …")
     response = requests.get(url, stream=True)
@@ -31,7 +32,7 @@ def download_little_checkpoint():
     url = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth"
     os.makedirs("models", exist_ok=True)
     filename = os.path.basename(url)
-    local_path = os.path.join("models", filename)
+    local_path = os.path.join(os.path.dirname(__file__), "models", filename)
 
     print(f"Downloading {url} …")
     response = requests.get(url, stream=True)
@@ -57,12 +58,13 @@ if __name__ == "__main__":
     tprint("Setup")
     print(80*"=")
     print("Welcome to Segmentator setup, lets download the necessary models.")
-    print("Would you like to download the vit_h (huge) or the vit_l (little) model?")
-    print("Huge model provides better results but does cost more resources to run, little has less precision but faster (better for laptops)")
+    download_huge_checkpoint()
+    # print("Would you like to download the vit_h (huge) or the vit_l (little) model?")
+    # print("Huge model provides better results but does cost more resources to run, little has less precision but faster (better for laptops)")
     
-    choice = input("Which model do you want to download? (huge / little): ")
+    # choice = input("Which model do you want to download? (huge / little): ")
 
-    if choice == "huge":
-        download_huge_checkpoint()
-    elif choice == "little":
-        download_little_checkpoint()
+    # if choice == "huge":
+    #     download_huge_checkpoint()
+    # elif choice == "little":
+    #     download_little_checkpoint()
