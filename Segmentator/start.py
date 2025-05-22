@@ -54,7 +54,7 @@ def resource_monitor(pbar, stop_event, pbar_lock):
 # Initialize the Segment Anything Model
 
 def initialize_sam():
-    sam_checkpoint = os.path.expanduser("~/sam_vit_h_4b8939.pth")  # Update path as needed
+    sam_checkpoint = os.path.expanduser("c:\\Users\\Riley\\Desktop\\sam_vit_h_4b8939.pth")  # Update path as needed
     model_type = "vit_h"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
@@ -95,16 +95,18 @@ def erode_mask(mask, kernel_size=3, iterations=1):
 
 # Visualization and cropping
 
-def visualize_and_save_segmentation(image, masks, output_folder):
-    plt.figure(figsize=(10, 10))
-    plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    for mask in masks:
-        plt.contour(mask['segmentation'], colors="red")
-    plt.axis('off')
-    plt.tight_layout()
-    out_file = os.path.join(output_folder, 'visualization.png')
-    plt.savefig(out_file, bbox_inches='tight', pad_inches=0)
-    plt.close()
+#Do we really need the visualization?
+
+# def visualize_and_save_segmentation(image, masks, output_folder):
+#     plt.figure(figsize=(10, 10))
+#     plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+#     for mask in masks:
+#         plt.contour(mask['segmentation'], colors="red")
+#     plt.axis('off')
+#     plt.tight_layout()
+#     out_file = os.path.join(output_folder, 'visualization.png')
+#     plt.savefig(out_file, bbox_inches='tight', pad_inches=0)
+#     plt.close()
 
 
 def crop_and_save_masks(image, masks, output_folder, erosion_kernel_size=3, erosion_iterations=1):
@@ -118,7 +120,7 @@ def crop_and_save_masks(image, masks, output_folder, erosion_kernel_size=3, eros
             cropped[:, :, c] = cropped[:, :, c] * m_bool
         out_path = os.path.join(output_folder, f'mask_{idx+1}.png')
         cv2.imwrite(out_path, cropped)
-        print(f"Saved {out_path}")
+        #print(f"Saved {out_path}")
 
 # Original download and enhancement functions
 
@@ -213,7 +215,7 @@ def segmentation():
                     img_name = os.path.splitext(img_file)[0]
                     folder = os.path.join(output_dir, img_name)
                     os.makedirs(folder, exist_ok=True)
-                    visualize_and_save_segmentation(img, masks, folder)
+                    #visualize_and_save_segmentation(img, masks, folder)
                     crop_and_save_masks(img, masks, folder)
                 except Exception as e:
                     print(f"Error on {img_file}: {e}")
@@ -257,6 +259,7 @@ def main():
     run_segmentation = input("Would you like to continue and run Segmentation? (Y/N): ")
     if run_segmentation.lower() == "y":
         segmentation()
+        print("All finished... Closing Segmentator")
     else:
         print("Closing Segmentator...")
 
@@ -265,3 +268,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+## c:\Users\Riley\Desktop\10URL.txt
