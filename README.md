@@ -34,7 +34,7 @@ Segmentator is a tool for automated image segmentation and preparation of transc
 Install dependencies with:
 
 ```sh
-pip install torch torchvision opencv-python numpy tqdm pillow requests art easyocr psutil GPUtil
+pip install torch torchvision opencv-python numpy tqdm pillow requests art easyocr psutil GPUtil segment-anything
 # For SAM, follow instructions at https://github.com/facebookresearch/segment-anything
 ```
 
