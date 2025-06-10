@@ -57,7 +57,8 @@ def resource_monitor(pbar, stop_event, pbar_lock):
 def initialize_sam():
     sam_checkpoint = os.path.join(os.path.dirname(__file__), "models", "sam_vit_h_4b8939.pth")
     model_type = "vit_h"
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    #device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"
     sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
     sam.to(device=device)
     return SamAutomaticMaskGenerator(
@@ -104,7 +105,7 @@ def crop_and_save_masks(image, masks, output_folder, erosion_kernel_size=3, eros
 
 # Download images from URL list
 def download_images(file_path):
-    input_dir = os.path.join(os.path.dirname(__file__), "Input-Images")
+    input_dir = os.path.join(os.path.dirname(__file__), "input-images")
     os.makedirs(input_dir, exist_ok=True)
     for f in os.listdir(input_dir):
         fp = os.path.join(input_dir, f)
@@ -137,7 +138,7 @@ def download_images(file_path):
 
 # Enhance downloaded images for segmentation
 def enhance_image():
-    input_dir = os.path.join(os.path.dirname(__file__), "Input-Images")
+    input_dir = os.path.join(os.path.dirname(__file__), "input-images")
     output_dir = os.path.join(os.path.dirname(__file__), "enhanced-images")
     os.makedirs(output_dir, exist_ok=True)
     for f in os.listdir(output_dir):
@@ -247,7 +248,7 @@ def create_collage(image_paths, output_path, max_width=2000, background_color=(0
 # into Desktop/Transcription_Ready_Images/<timestamp>/
 def create_transcription_ready_collages():
     base_folder = os.path.join(os.path.dirname(__file__), "segmented-images")
-    enhanced_folder = os.path.join(os.path.dirname(__file__), "Input-Images")
+    enhanced_folder = os.path.join(os.path.dirname(__file__), "input-images")
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     desktop = os.path.join(os.path.expanduser("~"), "Desktop")
     output_root = os.path.join(desktop, "Transcription_Ready_Images", timestamp)
@@ -317,7 +318,7 @@ def main():
     print("Download complete.")
 
     if input("View downloaded images? (Y/N): ").lower() == 'y':
-        for f in sorted(os.listdir(os.path.join(os.path.dirname(__file__), "Input-Images"))):
+        for f in sorted(os.listdir(os.path.join(os.path.dirname(__file__), "input-images"))):
             print(f)
 
     if input("Enhance images for segmentation? (Y/N): ").lower() == 'y':
