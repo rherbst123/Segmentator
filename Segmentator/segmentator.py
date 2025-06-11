@@ -57,8 +57,8 @@ def resource_monitor(pbar, stop_event, pbar_lock):
 def initialize_sam():
     sam_checkpoint = os.path.join(os.path.dirname(__file__), "models", "sam_vit_h_4b8939.pth")
     model_type = "vit_h"
-    #device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    #device = "cpu"
     sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
     sam.to(device=device)
     return SamAutomaticMaskGenerator(
@@ -262,8 +262,14 @@ def create_transcription_ready_collages():
         if os.path.isfile(src_enhanced_path):
             shutil.copy(src_enhanced_path, os.path.join(all_enhanced_dir, enhanced_file_name))
     print(f"Copied all enhanced images to: {all_enhanced_dir}")
+    
+    # Create a folder for all collages
+    collaged_images_dir = os.path.join(output_root, "Collaged_Images")
+    os.makedirs(collaged_images_dir, exist_ok=True)
 
     reader = easyocr.Reader(['en'])
+    
+    all_collages = []
 
     for root, dirs, files in os.walk(base_folder):
         if not files:
@@ -291,12 +297,14 @@ def create_transcription_ready_collages():
             out_dir = os.path.join(output_root, folder_name)
             os.makedirs(out_dir, exist_ok=True)
 
-            
-
-
             # Create and save collage named after folder
             collage_path = os.path.join(out_dir, f"{folder_name}_collage.png")
             create_collage(kept_segments, collage_path)
+            
+            # Also save a copy to the Collaged_Images folder
+            collage_copy_path = os.path.join(collaged_images_dir, f"{folder_name}_collage.png")
+            shutil.copy(collage_path, collage_copy_path)
+            all_collages.append(collage_copy_path)
 
             # Copy all kept segments into a subfolder
             segments_dir = os.path.join(out_dir, 'segments')
@@ -305,6 +313,8 @@ def create_transcription_ready_collages():
                 shutil.copy(seg_path, os.path.join(segments_dir, os.path.basename(seg_path)))
 
             print(f"Created output folder for {folder_name}: {out_dir}")
+    
+    print(f"All collages saved to: {collaged_images_dir}")
 
 # Main entry point
 def main():
