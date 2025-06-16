@@ -2,6 +2,7 @@ import os
 import shutil
 import requests
 import csv
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 from art import *
 from tqdm import tqdm
 from PIL import Image, ImageEnhance
@@ -53,22 +54,36 @@ def resource_monitor(pbar, stop_event, pbar_lock):
             pbar.set_postfix_str(usage)
         time.sleep(1)
 
+# Choose between available SAM models
+def choose_sam_model():
+    print("Available models:")
+    print("1. ViT-L (Faster, lower memory usage)")
+    print("2. ViT-H (Higher accuracy, requires more memory)")
+    choice = input("Choose model (1/2): ").strip()
+    
+    if choice == "2":
+        return "vit_h", "sam_vit_h_4b8939.pth"
+    else:
+        return "vit_l", "sam_vit_l_0b3195.pth"
+
 # Initialize the Segment Anything Model
-def initialize_sam():
-    sam_checkpoint = os.path.join(os.path.dirname(__file__), "models", "sam_vit_h_4b8939.pth")
-    model_type = "vit_h"
+def initialize_sam(model_type=None, model_file=None):
+    if model_type is None or model_file is None:
+        model_type, model_file = choose_sam_model()
+    
+    sam_checkpoint = os.path.join(os.path.dirname(__file__), "models", model_file)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     #device = "cpu"
     sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
     sam.to(device=device)
     return SamAutomaticMaskGenerator(
         sam,
-        points_per_side=19,
-        pred_iou_thresh=0.50,
-        stability_score_thresh=0.92,
-        crop_n_layers=1,
+        points_per_side=14,
+        pred_iou_thresh=0.90,
+        stability_score_thresh=0.90,
+        crop_n_layers=0,
         crop_n_points_downscale_factor=0.7,
-        min_mask_region_area=14500,
+        min_mask_region_area=30000,
     )
 
 # Mask processing utilities
@@ -156,7 +171,7 @@ def enhance_image():
             print(f"Enhance failed {img_name}: {e}")
 
 # Segment enhanced images using SAM
-def segmentation():
+def segmentation(model_type=None, model_file=None):
     input_dir = os.path.join(os.path.dirname(__file__), "enhanced-images")
     output_dir = os.path.join(os.path.dirname(__file__), "segmented-images")
     os.makedirs(output_dir, exist_ok=True)
@@ -170,7 +185,7 @@ def segmentation():
         monitor = threading.Thread(target=resource_monitor, args=(pbar, stop_event, pbar_lock))
         monitor.start()
         try:
-            mask_generator = initialize_sam()
+            mask_generator = initialize_sam(model_type, model_file)
             for img_file in image_files:
                 with pbar_lock:
                     pbar.set_description(f"Segmenting {img_file}")
@@ -183,7 +198,11 @@ def segmentation():
                         img = cv2.resize(img, (int(img.shape[1]*scale), int(img.shape[0]*scale)))
                     masks = mask_generator.generate(img)
                     area = img.shape[0]*img.shape[1]
-                    masks = [m for m in masks if m['area'] < area * 0.8]
+                    # Keep masks that are neither too small nor too large
+                    min_allowed = area * 0.01
+                    max_allowed = area * 0.85
+                    masks = [m for m in masks if min_allowed < m['area'] < max_allowed]
+
                     masks = remove_duplicate_masks(masks, iou_threshold=0.80)
                     img_name = os.path.splitext(img_file)[0]
                     folder = os.path.join(output_dir, img_name)
@@ -346,7 +365,8 @@ def main():
 
     print(80 * "=")
     if input("Would you like to continue and run Segmentation? (Y/N): ").lower() == "y":
-        segmentation()
+        model_type, model_file = choose_sam_model()
+        segmentation(model_type, model_file)
         print("Segmentation complete. Creating transcription-ready collages...")
         print(80*"=")
         create_transcription_ready_collages()
