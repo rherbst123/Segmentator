@@ -1,8 +1,17 @@
+# Segmentator – SAM 2.1 edition
+# =============================================================
+# Only SAM-related portions are changed; all other logic (download,
+# enhancement, segmentation loop, collage creation, CLI entry‑point)
+# remains identical to your original pipeline.
+# =============================================================
+
 import os
 import shutil
 import requests
 import csv
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 from art import *
 from tqdm import tqdm
 from PIL import Image, ImageEnhance
@@ -10,74 +19,103 @@ import psutil
 import torch
 import cv2
 import numpy as np
-gc = __import__('gc')
 import GPUtil
 import threading
 import time
-from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
+
+# ────────────────────────────────────────────────────────────────
+# SAM 2.1 imports  (note the new automatic mask generator path)
+# ────────────────────────────────────────────────────────────────
+from sam2.build_sam import build_sam2
+from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+
 from torchvision.ops import boxes
 import easyocr
 from datetime import datetime
+import gc as _gc
 
-# Patch for boxes.batched_nms
+# ----------------------------------------------------------------
+# Patch torchvision NMS for CPU fallback (unchanged)
+# ----------------------------------------------------------------
 _original_batched_nms = boxes.batched_nms
 
-def patched_batched_nms(boxes_tensor, scores, idxs, iou_threshold):
+def _patched_batched_nms(boxes_tensor, scores, idxs, iou_threshold):
     boxes_tensor = boxes_tensor.cpu()
     scores = scores.cpu()
     idxs = idxs.cpu()
     return _original_batched_nms(boxes_tensor, scores, idxs, iou_threshold)
 
-boxes.batched_nms = patched_batched_nms
+boxes.batched_nms = _patched_batched_nms
 
-# Utility functions for resource monitoring
-def get_resource_usage():
-    cpu_percent = psutil.cpu_percent()
-    memory = psutil.virtual_memory()
-    memory_percent = memory.percent
+# ----------------------------------------------------------------
+# Resource‑monitoring helpers (unchanged)
+# ----------------------------------------------------------------
+
+def _get_resource_usage():
+    cpu = psutil.cpu_percent()
+    mem = psutil.virtual_memory().percent
     gpus = GPUtil.getGPUs()
     if gpus:
-        gpu = gpus[0]
-        gpu_percent = gpu.load * 100
-        gpu_memory_used = gpu.memoryUsed
-        gpu_memory_total = gpu.memoryTotal
-        gpu_memory_percent = (gpu_memory_used / gpu_memory_total) * 100
+        g = gpus[0]
+        gpu = g.load * 100
+        gpu_mem = (g.memoryUsed / g.memoryTotal) * 100
     else:
-        gpu_percent = 0
-        gpu_memory_percent = 0
-    return f"CPU:{cpu_percent:.1f}%, Mem:{memory_percent:.1f}%, GPU:{gpu_percent:.1f}%, GPU Mem:{gpu_memory_percent:.1f}%"
+        gpu = gpu_mem = 0
+    return f"CPU:{cpu:.1f}%, Mem:{mem:.1f}%, GPU:{gpu:.1f}%, GPU Mem:{gpu_mem:.1f}%"
 
-def resource_monitor(pbar, stop_event, pbar_lock):
-    while not stop_event.is_set():
-        usage = get_resource_usage()
-        with pbar_lock:
-            pbar.set_postfix_str(usage)
+def _resource_monitor(pbar, stop_evt, lock):
+    while not stop_evt.is_set():
+        with lock:
+            pbar.set_postfix_str(_get_resource_usage())
         time.sleep(1)
 
-# Choose between available SAM models
-def choose_sam_model():
-    print("Available models:")
-    print("1. ViT-L (Faster, lower memory usage)")
-    print("2. ViT-H (Higher accuracy, requires more memory)")
-    choice = input("Choose model (1/2): ").strip()
-    
-    if choice == "2":
-        return "vit_h", "sam_vit_h_4b8939.pth"
-    else:
-        return "vit_l", "sam_vit_l_0b3195.pth"
+# Back‑compat alias so existing calls in segmentation() keep working
+resource_monitor = _resource_monitor
 
-# Initialize the Segment Anything Model
-def initialize_sam(model_type=None, model_file=None):
-    if model_type is None or model_file is None:
-        model_type, model_file = choose_sam_model()
-    
-    sam_checkpoint = os.path.join(os.path.dirname(__file__), "models", model_file)
-    #device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = "cpu"
-    sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+# ----------------------------------------------------------------
+# SAM 2.1 model selection
+# ----------------------------------------------------------------
+
+def choose_sam_model() -> tuple[str, str]:
+    """Prompt for the SAM 2.1 checkpoint and return
+    (Hydra‑config, checkpoint_filename).
+
+    *Hydra config* must be a **package‑relative path** *without* the
+    `.yaml` extension so that Hydra finds it inside the `sam2` package
+    search path.  In the repo layout this is:
+        sam2/configs/sam2.1/sam2.1_hiera_s.yaml  →  "sam2.1/sam2.1_hiera_s"
+    """
+    print("Available SAM 2.1 checkpoints:")
+    print("1. Hiera‑Small  (fast, <3 GB VRAM)")
+    print("2. Hiera‑Large  (highest accuracy, ~8 GB VRAM)")
+    choice = input("Choose model (1/2): ").strip()
+    if choice == "2":
+        return "sam2.1/sam2.1_hiera_l", "sam2.1_hiera_large.pt"
+    return "sam2.1/sam2.1_hiera_s", "sam2.1_hiera_small.pt"
+
+# ----------------------------------------------------------------
+# Initialise SAM 2.1 Automatic Mask Generator
+# ----------------------------------------------------------------
+
+def initialize_sam(config_name: str, checkpoint_file: str):
+    """Build a SAM 2.1 model + AutomaticMaskGenerator.
+
+    * `config_name` ⇢ Hydra‑style name, **no file extension**.
+    * `checkpoint_file` ⇢ .pt file we downloaded to ./models/.
+    """
+    models_dir = os.path.join(os.path.dirname(__file__), "models")
+    ckpt_path = os.path.join(models_dir, checkpoint_file)
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Build + load weights
+    sam = build_sam2(config_file=config_name, checkpoint=ckpt_path)
     sam.to(device=device)
-    return SamAutomaticMaskGenerator(
-        sam,
+
+    return SAM2AutomaticMaskGenerator(
+        model=sam,
         points_per_side=14,
         pred_iou_thresh=0.90,
         stability_score_thresh=0.90,
@@ -86,13 +124,15 @@ def initialize_sam(model_type=None, model_file=None):
         min_mask_region_area=30000,
     )
 
-# Mask processing utilities
+# -------------- existing helper functions unchanged --------------
+
 def compute_mask_iou(mask1, mask2):
     m1 = mask1.astype(bool)
     m2 = mask2.astype(bool)
     intersection = np.logical_and(m1, m2).sum()
     union = np.logical_or(m1, m2).sum()
     return intersection / (union + 1e-6)
+
 
 def remove_duplicate_masks(masks, iou_threshold=0.80):
     unique = []
@@ -101,11 +141,13 @@ def remove_duplicate_masks(masks, iou_threshold=0.80):
             unique.append(m)
     return unique
 
+
 def erode_mask(mask, kernel_size=3, iterations=1):
     kernel = np.ones((kernel_size, kernel_size), np.uint8)
     m_uint8 = (mask.astype(np.uint8)) * 255
     eroded = cv2.erode(m_uint8, kernel, iterations=iterations)
     return eroded > 0
+
 
 def crop_and_save_masks(image, masks, output_folder, erosion_kernel_size=3, erosion_iterations=1):
     for idx, mask in enumerate(masks):
@@ -117,6 +159,7 @@ def crop_and_save_masks(image, masks, output_folder, erosion_kernel_size=3, eros
             cropped[:, :, c] = cropped[:, :, c] * m_bool
         out_path = os.path.join(output_folder, f'mask_{idx+1}.png')
         cv2.imwrite(out_path, cropped)
+
 
 # Download images from URL list
 def download_images(file_path):
