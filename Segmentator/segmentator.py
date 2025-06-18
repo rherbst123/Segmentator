@@ -259,6 +259,10 @@ def segmentation(model_type=None, model_file=None):
     output_dir = os.path.join(os.path.dirname(__file__), "segmented-images")
     os.makedirs(output_dir, exist_ok=True)
     image_files = [f for f in os.listdir(input_dir) if f.lower().endswith(('.jpg','.jpeg','.png'))]
+    
+    # Sort files by index (assuming filenames start with numbers like 0001_...)
+    image_files.sort(key=lambda x: int(x.split('_')[0]) if x.split('_')[0].isdigit() else float('inf'))
+    
     if not image_files:
         print("No images to segment.")
         return
@@ -392,8 +396,19 @@ def create_transcription_ready_collages():
     collaged_images_dir = os.path.join(output_root, "Collaged_Images")
     os.makedirs(collaged_images_dir, exist_ok=True)
 
-    reader = easyocr.Reader(['en'])
+    # Force CUDA cache clearing and use CPU for EasyOCR
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
+    # Initialize EasyOCR with CPU device
+    reader = None
+    try:
+        reader = easyocr.Reader(['en'], gpu=False)
+    except Exception as e:
+        print(f"Error initializing EasyOCR: {e}")
+        print("Continuing without OCR text detection...")
+        
     all_collages = []
 
     for root, dirs, files in os.walk(base_folder):
@@ -409,12 +424,24 @@ def create_transcription_ready_collages():
                 img = Image.open(file_path)
                 width, height = img.size
                 img_np = np.array(img)
-                words = reader.readtext(img_np, detail=0)
-                if len(words) < 3 or (width > 800 and height > 1500) or (height >= 4.7 * width or width >= 4.7 * height):
-                    # os.remove(file_path) # Decide if you want to remove originals from segmented-images
-                    continue
-                kept_segments.append(file_path)
-            except Exception:
+                try:
+                    if reader is not None:
+                        words = reader.readtext(img_np, detail=0)
+                        if len(words) < 3 or (width > 800 and height > 1500) or (height >= 4.7 * width or width >= 4.7 * height):
+                            # os.remove(file_path) # Decide if you want to remove originals from segmented-images
+                            continue
+                    else:
+                        # If no OCR reader, just check dimensions
+                        if (width > 800 and height > 1500) or (height >= 4.7 * width or width >= 4.7 * height):
+                            continue
+                    kept_segments.append(file_path)
+                except Exception as e:
+                    print(f"OCR error on {filename}: {e}")
+                    # If OCR fails, still keep the segment if it's a reasonable size
+                    if not (width > 800 and height > 1500) and not (height >= 4.7 * width or width >= 4.7 * height):
+                        kept_segments.append(file_path)
+            except Exception as e:
+                print(f"Error processing {filename}: {e}")
                 continue
 
         if kept_segments:
@@ -474,7 +501,7 @@ def main():
     print(80 * "=")
     tprint("Segmentator")
     print(80 * "=")
-    print("Welcome To FieldMuseum's Segmentator! v1.1")
+    print("Welcome To FieldMuseum's Segmentator! v1.2")
     
     # Clean up all image folders at startup
     cleanup_image_folders()
@@ -507,6 +534,12 @@ def main():
         segmentation(model_type, model_file)
         print("Segmentation complete. Creating transcription-ready collages...")
         print(80*"=")
+        # Make sure GPU is fully released before proceeding
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()  # Wait for all CUDA operations to finish
+        
         create_transcription_ready_collages()
         print(80*"=")
         print("All Done!! Check your Desktop/Transcription_Ready_Images folder.")

@@ -2,6 +2,7 @@
 import os
 import requests
 from tqdm import tqdm
+from art import *
 
 def download_file(url, destination):
     """

@@ -1,0 +1,2 @@
+V1.2: Added Hardware Recognision so that users can choose models and parameters based on their computer. Reformatted the Setup so it installs 
+all models so that users only need to run it once. 
