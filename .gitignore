@@ -1,8 +1,12 @@
 
 /models
 /Segmentator/models
-*.jpg
-/Segmentator/Input-Images
+/enhanced-images
+/input-images
+/segmented-images
 /Segmentator/segmented-images
+/Segmentator/input-images
 /Segmentator/enhanced-images
-/Segmentator/Input-Images
+/Segmentator2.1/input-images
+/Segmentator2.1/enhanced-images
+/Segmentator2.1/models
