@@ -1,89 +1,61 @@
 # Segmentator
 
-Segmentator is a tool for automated image segmentation and preparation of transcription-ready collages, designed for use with the [Segment Anything Model (SAM)](https://github.com/facebookresearch/segment-anything). It downloads images from a list of URLs, enhances them, segments them using SAM, and organizes the results into collages and folders for easy transcription.
+A tool for segmenting images using Meta's Segment Anything Model (SAM).
 
-## Features
-
-- Download images from `.txt` or `.csv` lists of URLs
-- Enhance images for optimal segmentation
-- Segment images using Meta's Segment Anything Model (SAM)
-- Filter and organize segmented images
-- Create collages and transcription-ready folders
-
-## Requirements
+## System Requirements
 
 - Python 3.8+
-- NVIDIA GPU with at least 8GB VRAM (recommended for best performance)
-- CUDA drivers (if using GPU)
+- PyTorch 1.7+
+- CUDA-compatible GPU with at least 4GB VRAM (recommended)
+- 8GB+ RAM
 
-### Python Dependencies
+## Installation
 
-- torch
-- torchvision
-- opencv-python
-- numpy
-- tqdm
-- pillow
-- requests
-- art
-- easyocr
-- psutil
-- GPUtil
-- segment-anything (install from [SAM GitHub](https://github.com/facebookresearch/segment-anything))
-
-Install dependencies with:
-
-```sh
-pip install torch torchvision opencv-python numpy tqdm pillow requests art easyocr psutil GPUtil segment-anything
-# For SAM, follow instructions at https://github.com/facebookresearch/segment-anything
+1. Clone this repository:
+```bash
+git clone https://github.com/FieldMuseum/Segmentator.git
+cd Segmentator
 ```
 
-## Setup
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-1. **Clone the repository:**
+3. Download the SAM models:
+```bash
+python download_models.py
+```
 
-    ```sh
-    git clone https://github.com/yourusername/Segmentator.git
-    cd Segmentator
-    ```
+## Usage
 
-2. **Download the SAM model checkpoint:**
+1. Prepare a text file with image URLs (one URL per line) or a CSV file with URLs.
 
-    Run the setup script to download the required model weights:
+2. Run the segmentator:
+```bash
+python -m Segmentator.segmentator
+```
 
-    ```sh
-    python setup.py
-    ```
+3. Follow the prompts to:
+   - Provide the path to your URL file
+   - View downloaded images
+   - Enhance images
+   - Choose a SAM model
+   - Run segmentation
 
-    This will download the `sam_vit_h_4b8939.pth` checkpoint into `Segmentator/models/`.
+## Memory Optimization
 
-3. **Prepare your image URL list:**
+If you're experiencing memory issues:
 
-    - Create a `.txt` or `.csv` file containing image URLs (one per line for `.txt`, or comma-separated for `.csv`).
+1. Use the ViT-B model (option 3) which requires the least memory
+2. Reduce image resolution by modifying the `enhance_image` function
+3. Process fewer images at a time
 
-4. **Run Segmentator:**
+## Troubleshooting
 
-    ```sh
-    python Segmentator/segmentator.py
-    ```
+- **Out of memory errors**: The script will now automatically adjust settings based on your hardware. If you still encounter memory issues, try using the ViT-B model.
+- **CUDA errors**: If you encounter CUDA errors, the script will automatically fall back to CPU processing.
 
-    Follow the prompts to:
-    - Provide your URL list file
-    - Optionally view and enhance images
-    - Run segmentation and generate collages
+## License
 
-5. **Results:**
-
-    - Enhanced images: `Segmentator/enhanced-images/`
-    - Segmented images: `Segmentator/segmented-images/`
-    - Transcription-ready collages and folders: `~/Desktop/Transcription_Ready_Images/<timestamp>/`
-
-## Notes
-
-- The first run may take time to download models and process images.
-- GPU is highly recommended for segmentation speed.
-- For best results, use high-quality input images.
-
-
-
-**Developed by Riley Herbst**
+[MIT License](LICENSE)

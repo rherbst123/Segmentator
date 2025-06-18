@@ -18,6 +18,9 @@ from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 from torchvision.ops import boxes
 import easyocr
 from datetime import datetime
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 # Patch for boxes.batched_nms
 _original_batched_nms = boxes.batched_nms
@@ -35,6 +38,9 @@ def get_resource_usage():
     cpu_percent = psutil.cpu_percent()
     memory = psutil.virtual_memory()
     memory_percent = memory.percent
+    memory_used = memory.used / (1024 * 1024)  # MB
+    memory_total = memory.total / (1024 * 1024)  # MB
+    
     gpus = GPUtil.getGPUs()
     if gpus:
         gpu = gpus[0]
@@ -42,10 +48,11 @@ def get_resource_usage():
         gpu_memory_used = gpu.memoryUsed
         gpu_memory_total = gpu.memoryTotal
         gpu_memory_percent = (gpu_memory_used / gpu_memory_total) * 100
+        gpu_info = f", GPU:{gpu_percent:.1f}%, GPU Mem:{gpu_memory_percent:.1f}% ({gpu_memory_used:.0f}/{gpu_memory_total:.0f}MB)"
     else:
-        gpu_percent = 0
-        gpu_memory_percent = 0
-    return f"CPU:{cpu_percent:.1f}%, Mem:{memory_percent:.1f}%, GPU:{gpu_percent:.1f}%, GPU Mem:{gpu_memory_percent:.1f}%"
+        gpu_info = ""
+    
+    return f"CPU:{cpu_percent:.1f}%, Mem:{memory_percent:.1f}% ({memory_used:.0f}/{memory_total:.0f}MB){gpu_info}"
 
 def resource_monitor(pbar, stop_event, pbar_lock):
     while not stop_event.is_set():
@@ -59,10 +66,24 @@ def choose_sam_model():
     print("Available models:")
     print("1. ViT-L (Faster, lower memory usage)")
     print("2. ViT-H (Higher accuracy, requires more memory)")
-    choice = input("Choose model (1/2): ").strip()
+    print("3. ViT-B (Fastest, lowest memory usage - recommended for systems with limited resources)")
+    
+    # Check system resources and make a recommendation
+    gpus = GPUtil.getGPUs()
+    if gpus:
+        gpu = gpus[0]
+        gpu_memory_total = gpu.memoryTotal
+        if gpu_memory_total < 4500:  # Less than 4.5GB VRAM
+            print("\nRECOMMENDATION: Your GPU has limited memory. Option 3 (ViT-B) is recommended.")
+        elif gpu_memory_total < 8000:  # Less than 8GB VRAM
+            print("\nRECOMMENDATION: Your GPU has moderate memory. Option 1 (ViT-L) is recommended.")
+    
+    choice = input("Choose model (1/2/3): ").strip()
     
     if choice == "2":
         return "vit_h", "sam_vit_h_4b8939.pth"
+    elif choice == "3":
+        return "vit_b", "sam_vit_b_01ec64.pth"
     else:
         return "vit_l", "sam_vit_l_0b3195.pth"
 
@@ -72,17 +93,38 @@ def initialize_sam(model_type=None, model_file=None):
         model_type, model_file = choose_sam_model()
     
     sam_checkpoint = os.path.join(os.path.dirname(__file__), "models", model_file)
-    #device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = "cpu"
+    
+    # Check available memory and decide on device
+    use_cuda = torch.cuda.is_available()
+    if use_cuda:
+        # Get GPU memory info
+        gpus = GPUtil.getGPUs()
+        if gpus:
+            gpu = gpus[0]
+            gpu_memory_total = gpu.memoryTotal
+            print(f"GPU Memory: {gpu_memory_total} MB")
+            # If GPU has less than 6GB, use CPU
+            if gpu_memory_total < 6000:
+                print("GPU memory less than 6GB, using CPU instead")
+                use_cuda = False
+    
+    device = "cuda" if use_cuda else "cpu"
+    print(f"Using device: {device}")
+    
+    # Load model
     sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
     sam.to(device=device)
+    
+    # Adjust parameters based on device
+    points_per_side = 12 if device == "cpu" else 18
+    crop_n_layers = 0 if device == "cpu" else 1
+    
     return SamAutomaticMaskGenerator(
         sam,
-        points_per_side=14,
+        points_per_side=points_per_side,
         pred_iou_thresh=0.90,
         stability_score_thresh=0.90,
-        crop_n_layers=0,
-        crop_n_points_downscale_factor=0.7,
+        crop_n_layers=crop_n_layers,
         min_mask_region_area=30000,
     )
 
@@ -108,23 +150,48 @@ def erode_mask(mask, kernel_size=3, iterations=1):
     return eroded > 0
 
 def crop_and_save_masks(image, masks, output_folder, erosion_kernel_size=3, erosion_iterations=1):
-    for idx, mask in enumerate(masks):
-        eroded = erode_mask(mask['segmentation'], kernel_size=erosion_kernel_size, iterations=erosion_iterations)
-        x, y, w, h = map(int, mask['bbox'])
-        cropped = image[y:y+h, x:x+w]
-        m_bool = eroded[y:y+h, x:x+w]
-        for c in range(3):
-            cropped[:, :, c] = cropped[:, :, c] * m_bool
-        out_path = os.path.join(output_folder, f'mask_{idx+1}.png')
-        cv2.imwrite(out_path, cropped)
+    # Process masks in batches to reduce memory usage
+    batch_size = 20
+    for i in range(0, len(masks), batch_size):
+        batch_masks = masks[i:i+batch_size]
+        for idx, mask in enumerate(batch_masks):
+            try:
+                eroded = erode_mask(mask['segmentation'], kernel_size=erosion_kernel_size, iterations=erosion_iterations)
+                x, y, w, h = map(int, mask['bbox'])
+                
+                # Ensure coordinates are within image bounds
+                x = max(0, x)
+                y = max(0, y)
+                w = min(w, image.shape[1] - x)
+                h = min(h, image.shape[0] - y)
+                
+                if w <= 0 or h <= 0:
+                    continue  # Skip invalid masks
+                
+                cropped = image[y:y+h, x:x+w].copy()  # Create a copy to avoid modifying original
+                m_bool = eroded[y:y+h, x:x+w]
+                
+                # Check if mask and cropped image have compatible dimensions
+                if m_bool.shape[:2] != cropped.shape[:2]:
+                    print(f"Skipping mask {i+idx+1} due to dimension mismatch")
+                    continue
+                
+                # Apply mask
+                for c in range(3):
+                    cropped[:, :, c] = cropped[:, :, c] * m_bool
+                
+                out_path = os.path.join(output_folder, f'mask_{i+idx+1}.png')
+                cv2.imwrite(out_path, cropped)
+            except Exception as e:
+                print(f"Error processing mask {i+idx+1}: {e}")
+        
+        # Clear memory after each batch
+        gc.collect()
 
 # Download images from URL list
 def download_images(file_path):
     input_dir = os.path.join(os.path.dirname(__file__), "input-images")
     os.makedirs(input_dir, exist_ok=True)
-    for f in os.listdir(input_dir):
-        fp = os.path.join(input_dir, f)
-        if os.path.isfile(fp): os.remove(fp)
     urls = []
     if file_path.endswith('.txt'):
         with open(file_path) as f:
@@ -156,16 +223,32 @@ def enhance_image():
     input_dir = os.path.join(os.path.dirname(__file__), "input-images")
     output_dir = os.path.join(os.path.dirname(__file__), "enhanced-images")
     os.makedirs(output_dir, exist_ok=True)
-    for f in os.listdir(output_dir):
-        fp = os.path.join(output_dir, f)
-        if os.path.isfile(fp): os.remove(fp)
+    
+    # Determine optimal image size based on available memory
+    total_memory = psutil.virtual_memory().total / (1024 * 1024)  # MB
+    if total_memory < 8000:  # Less than 8GB RAM
+        target_width, target_height = 1000, 1500
+    elif total_memory < 16000:  # Less than 16GB RAM
+        target_width, target_height = 1200, 1800
+    else:
+        target_width, target_height = 1500, 2250
+    
+    print(f"Resizing images to {target_width}x{target_height} based on available memory")
+    
     imgs = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
     for img_name in tqdm(imgs, desc="Enhancing images"):
         try:
             with Image.open(os.path.join(input_dir, img_name)) as img:
-                img = img.resize((1500, 2250), Image.LANCZOS)
+                # Preserve aspect ratio
+                width, height = img.size
+                ratio = min(target_width/width, target_height/height)
+                new_width = int(width * ratio)
+                new_height = int(height * ratio)
+                
+                img = img.resize((new_width, new_height), Image.LANCZOS)
                 img = ImageEnhance.Color(img).enhance(1.2)
                 img = ImageEnhance.Brightness(img).enhance(0.9)
+                img = ImageEnhance.Contrast(img).enhance(1.1)  # Slightly increase contrast
                 img.save(os.path.join(output_dir, img_name))
         except Exception as e:
             print(f"Enhance failed {img_name}: {e}")
@@ -179,6 +262,20 @@ def segmentation(model_type=None, model_file=None):
     if not image_files:
         print("No images to segment.")
         return
+    
+    # Memory optimization settings
+    process_size = psutil.Process().memory_info().rss / (1024 * 1024)  # MB
+    total_memory = psutil.virtual_memory().total / (1024 * 1024)  # MB
+    print(f"Process memory usage: {process_size:.1f} MB, Total system memory: {total_memory:.1f} MB")
+    
+    # Determine max image size based on available memory
+    max_dim = 1500  # Default for low memory
+    if total_memory > 16000:  # More than 16GB RAM
+        max_dim = 2250
+    elif total_memory > 8000:  # More than 8GB RAM
+        max_dim = 1800
+    print(f"Using maximum image dimension: {max_dim}")
+    
     pbar_lock = threading.Lock()
     with tqdm(total=len(image_files), desc='Segmenting Images') as pbar:
         stop_event = threading.Event()
@@ -191,12 +288,19 @@ def segmentation(model_type=None, model_file=None):
                     pbar.set_description(f"Segmenting {img_file}")
                 img_path = os.path.join(input_dir, img_file)
                 try:
+                    # Clear memory before processing each image
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
                     img = cv2.imread(img_path)
-                    max_dim = 2250
                     scale = max_dim / max(img.shape[:2])
                     if scale < 1:
                         img = cv2.resize(img, (int(img.shape[1]*scale), int(img.shape[0]*scale)))
+                    
+                    # Process the entire image at once
                     masks = mask_generator.generate(img)
+                    
                     area = img.shape[0]*img.shape[1]
                     # Keep masks that are neither too small nor too large
                     min_allowed = area * 0.01
@@ -211,8 +315,10 @@ def segmentation(model_type=None, model_file=None):
                 except Exception as e:
                     print(f"Error on {img_file}: {e}")
                 finally:
-                    torch.cuda.empty_cache()
+                    # Ensure memory is cleared
                     gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                 with pbar_lock:
                     pbar.update(1)
         finally:
@@ -335,12 +441,44 @@ def create_transcription_ready_collages():
     
     print(f"All collages saved to: {collaged_images_dir}")
 
+# Clean up all image folders for a fresh start
+def cleanup_image_folders():
+    print("Cleaning up image folders for a fresh start...")
+    
+    # Clean up input-images folder
+    input_dir = os.path.join(os.path.dirname(__file__), "input-images")
+    os.makedirs(input_dir, exist_ok=True)
+    for f in os.listdir(input_dir):
+        fp = os.path.join(input_dir, f)
+        if os.path.isfile(fp): 
+            os.remove(fp)
+    
+    # Clean up enhanced-images folder
+    enhanced_dir = os.path.join(os.path.dirname(__file__), "enhanced-images")
+    os.makedirs(enhanced_dir, exist_ok=True)
+    for f in os.listdir(enhanced_dir):
+        fp = os.path.join(enhanced_dir, f)
+        if os.path.isfile(fp): 
+            os.remove(fp)
+    
+    # Clean up segmented-images folder
+    segmented_dir = os.path.join(os.path.dirname(__file__), "segmented-images")
+    if os.path.exists(segmented_dir):
+        shutil.rmtree(segmented_dir)
+    os.makedirs(segmented_dir, exist_ok=True)
+    
+    print("All image folders cleaned up successfully.")
+
 # Main entry point
 def main():
     print(80 * "=")
     tprint("Segmentator")
     print(80 * "=")
     print("Welcome To FieldMuseum's Segmentator! v1.1")
+    
+    # Clean up all image folders at startup
+    cleanup_image_folders()
+    
     print("Provide a .txt or .csv of image URLs to download and process.")
     file_path = input("Enter path to .txt or .csv: ").strip()
     download_images(file_path)
