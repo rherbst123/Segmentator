@@ -116,7 +116,7 @@ def initialize_sam(model_type=None, model_file=None):
     sam.to(device=device)
     
     # Adjust parameters based on device
-    points_per_side = 12 if device == "cpu" else 18
+    points_per_side = 16 if device == "cpu" else 24
     crop_n_layers = 0 if device == "cpu" else 1
     
     return SamAutomaticMaskGenerator(
@@ -188,6 +188,31 @@ def crop_and_save_masks(image, masks, output_folder, erosion_kernel_size=3, eros
         # Clear memory after each batch
         gc.collect()
 
+# Process images from local folder
+def process_local_images(folder_path):
+    input_dir = os.path.join(os.path.dirname(__file__), "input-images")
+    os.makedirs(input_dir, exist_ok=True)
+    
+    # Clear existing images
+    for f in os.listdir(input_dir):
+        os.remove(os.path.join(input_dir, f))
+    
+    # Copy images from source folder
+    supported_formats = {'.jpg', '.jpeg', '.png', '.bmp', '.gif'}
+    image_files = [f for f in os.listdir(folder_path) 
+                   if os.path.splitext(f.lower())[1] in supported_formats]
+    
+    if not image_files:
+        print("No supported image files found in the folder.")
+        return
+    
+    print(f"Found {len(image_files)} images in folder.")
+    for idx, img_file in enumerate(tqdm(image_files, desc="Copying images")):
+        src_path = os.path.join(folder_path, img_file)
+        dst_name = f"{idx+1:04d}_{os.path.splitext(img_file)[0]}{os.path.splitext(img_file)[1]}"
+        dst_path = os.path.join(input_dir, dst_name)
+        shutil.copy2(src_path, dst_path)
+
 # Download images from URL list
 def download_images(file_path):
     input_dir = os.path.join(os.path.dirname(__file__), "input-images")
@@ -217,6 +242,29 @@ def download_images(file_path):
                 f.write(r.content)
         except Exception as e:
             print(f"Failed {url}: {e}")
+
+# Choose input method
+def choose_input_method():
+    print("\nChoose input method:")
+    print("1. Download from URLs (txt/csv file)")
+    print("2. Use local image folder")
+    
+    choice = input("Choose option (1/2): ").strip()
+    
+    if choice == "2":
+        folder_path = input("Enter path to image folder: ").strip()
+        if not os.path.exists(folder_path):
+            print("Folder does not exist.")
+            return False
+        process_local_images(folder_path)
+        return True
+    else:
+        file_path = input("Enter path to URL file: ").strip()
+        if not os.path.exists(file_path):
+            print("File does not exist.")
+            return False
+        download_images(file_path)
+        return True
 
 # Enhance downloaded images for segmentation
 def enhance_image():
@@ -506,12 +554,13 @@ def main():
     # Clean up all image folders at startup
     cleanup_image_folders()
     
-    print("Provide a .txt or .csv of image URLs to download and process.")
-    file_path = input("Enter path to .txt or .csv: ").strip()
-    download_images(file_path)
-    print("Download complete.")
+    # Use the choose_input_method function to get images
+    if not choose_input_method():
+        print("Failed to load images. Exiting.")
+        return
+    print("Images loaded successfully.")
 
-    if input("View downloaded images? (Y/N): ").lower() == 'y':
+    if input("View loaded images? (Y/N): ").lower() == 'y':
         for f in sorted(os.listdir(os.path.join(os.path.dirname(__file__), "input-images"))):
             print(f)
 
